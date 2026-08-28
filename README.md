@@ -16,7 +16,7 @@ ISP scale, with one-command install.
 ## Quick start
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/aliasad40/log-server
 cd ipdr-logserver
 sudo bash install.sh
 ```
