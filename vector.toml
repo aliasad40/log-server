@@ -1,0 +1,75 @@
+# Vector configuration — IPDR/NAT log ingestion pipeline
+# Author: Ali Asad <aliasad4t@gmail.com>
+#
+# Sources  : syslog (UDP+TCP 514) from Juniper MX/ACX CGN/NAT + RADIUS-over-syslog
+#            + optional file tail of freeradius detail logs
+# Transform: extract src/nat IP:port, session id, timestamps as structured fields
+# Sink     : VictoriaLogs over HTTP (JSONL, compressed)
+
+data_dir = "/var/lib/vector"
+
+# ── Sources ─────────────────────────────────────────────────────────
+
+[sources.syslog_udp]
+type = "syslog"
+mode = "udp"
+address = "0.0.0.0:514"
+
+[sources.syslog_tcp]
+type = "syslog"
+mode = "tcp"
+address = "0.0.0.0:514"
+
+# Optional: tail freeradius accounting detail files directly.
+# Uncomment and adjust the glob if RADIUS isn't already sent via syslog.
+# [sources.radius_detail]
+# type = "file"
+# include = ["/var/log/radius/radacct/*/detail-*"]
+# read_from = "beginning"
+
+# ── Transforms ──────────────────────────────────────────────────────
+
+# Parse Juniper RT_FLOW / NAT syslog lines: pull out any key=value or
+# key="value" pairs that appear in the message (covers NAT session
+# create/close, source/nat address+port, rule name, etc). This is
+# intentionally generic — once you see real log samples from your
+# MX/ACX boxes, tighten this to the exact RT_FLOW tag format in use.
+[transforms.parse_flow]
+type = "remap"
+inputs = ["syslog_udp", "syslog_tcp"]
+source = '''
+  . = merge(., {"raw_message": .message})
+
+  # generic key=value / key="value" extraction
+  kv = parse_key_value(.message, key_value_delimiter: "=", field_delimiter: " ") ?? {}
+  . = merge(., kv)
+
+  # normalize common Juniper RT_FLOW field names if present
+  if exists(.["source-address"]) { .src_ip = .["source-address"] }
+  if exists(.["source-port"]) { .src_port = .["source-port"] }
+  if exists(.["nat-source-address"]) { .nat_ip = .["nat-source-address"] }
+  if exists(.["nat-source-port"]) { .nat_port = .["nat-source-port"] }
+  if exists(.["destination-address"]) { .dst_ip = .["destination-address"] }
+  if exists(.["destination-port"]) { .dst_port = .["destination-port"] }
+  if exists(.["session-id"]) { .session_id = .["session-id"] }
+
+  .ingested_at = now()
+'''
+
+# ── Sink: VictoriaLogs ──────────────────────────────────────────────
+[sinks.victorialogs]
+type = "elasticsearch"
+inputs = ["parse_flow"]
+endpoints = ["http://127.0.0.1:9428/insert/elasticsearch"]
+mode = "bulk"
+api_version = "v8"
+compression = "gzip"
+
+[sinks.victorialogs.query]
+_msg_field = "message"
+_time_field = "ingested_at"
+_stream_fields = "src_ip,nat_ip,dst_ip"
+
+[sinks.victorialogs.batch]
+max_bytes = 4000000
+timeout_secs = 2

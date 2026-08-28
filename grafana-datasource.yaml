@@ -1,0 +1,11 @@
+# Auto-provisioned Grafana datasource for VictoriaLogs
+# Author: Ali Asad <aliasad4t@gmail.com>
+apiVersion: 1
+
+datasources:
+  - name: VictoriaLogs
+    type: victoriametrics-logs-datasource
+    access: proxy
+    url: http://127.0.0.1:9428
+    isDefault: true
+    editable: true
